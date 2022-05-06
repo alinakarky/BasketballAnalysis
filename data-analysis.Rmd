@@ -1,0 +1,319 @@
+---
+title: "Exploring top players from NBA Basketball Datasets"
+author: "Alina Karki ( u3219751)"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r opts, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.path = "images/"
+)
+```
+
+## Overview 
+
+The purposes of this document are following:
+
+1. To analyse the various NBA datasets regarding players and team statistics
+2. To tidy up and wrangle the datasets
+3. To create various plots to analyse players performance relation with other variables
+
+## Load Required Packages
+
+```{r packages, message=FALSE}
+library(knitr)
+library(tidyverse)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(scales)
+```
+
+## Data source
+
+The data used in this documents are following:
+
+1. 2018-19_nba_player-statistics.csv :  sourced from [basketball-reference.com]
+
+2. 2018-19_nba_player-salaries.csv :  sourced from [hoopshype.com/salaries] 
+
+3. 2019-20_nba_team-payroll.csv : sourced from [hoopshype.com/salaries] 
+
+4. 2018-19_nba_team-statistics_1.csv : sourced from [basketball-reference.com]
+
+5. 2018-19_nba_team-statistics_2.csv : sourced from [basketball-reference.com]
+
+## Read Datasets
+
+All the data are loaded into corresponding variables using the `read_csv()` function from the `readr` package. 
+
+```{r read_data, message=FALSE} 
+# read in the data
+# all datasets are stored in data directory
+player_statistics <- read_csv("data/raw/2018-19_nba_player-statistics.csv")
+player_salaries <- read.csv("data/raw/2018-19_nba_player-salaries.csv")
+
+team_statistics_1 <- read_csv("data/raw/2018-19_nba_team-statistics_1.csv")
+team_statistics_2 <- read_csv("data/raw/2018-19_nba_team-statistics_2.csv")
+
+#team_statistic_2 has data that makes sense without missing values so lets take that data
+team_statistics <- team_statistics_2
+team_payroll <- read.csv("data/raw/2019-20_nba_team-payroll.csv")
+```
+
+## Checking the structure of datasets
+
+Check the structure of the all the data files using `str()`:
+
+```{r structure}
+str(player_statistics)
+str(player_salaries)
+str(team_statistics)
+str(team_payroll)
+```
+
+Check the first 6 rows of the data files using `head()`
+
+```{r head}
+head(player_statistics)
+head(team_statistics)
+head(player_salaries)
+head(team_payroll)
+
+```
+
+Check the last 6 rows of the data files using `tail()`
+
+```{r tail}
+tail(player_statistics)
+tail(player_salaries)
+tail(team_statistics)
+tail(team_payroll)
+```
+
+## Dealing with Missing Values
+```{r}
+sum(is.na(player_statistics)) # count the missing values
+head(which(is.na(player_statistics), arr.ind = TRUE)) # find where the missing values are (showing only first 6 rows)
+```
+
+## Plotting missing values for player statistics
+```{r fig.cap = "Plot of missing values"}
+naniar::vis_miss(player_statistics)
+```
+
+```{r na}
+sum(is.na(player_salaries))
+sum(is.na(team_statistics))
+sum(is.na(team_payroll))
+```
+
+Seems like the data can't be converted to wide to long or vice versa as each variable seems to be different.
+Since 0.6% have missing data lets delete them.
+We can impute the missing values with the using the`replace_na()` function from the dplyr package:
+
+```{r drop_na}
+player_statistics <- drop_na(player_statistics)
+team_statistics <- drop_na(team_statistics)
+sum(is.na(player_statistics)) # check for missing values again
+sum(is.na(team_statistics))
+```
+As per the data structure and our research scope, only two datasets ( player_statistics and player_salaries) out of four are decided to be used.
+
+Now player_name field has some duplicate values so lets check for duplicate player
+name and use only distinct players . Also, lets merge the player statistics and salary dataframe.
+
+```{r }
+player_statistics <- distinct(player_statistics,player_name,.keep_all = TRUE)
+
+# combine player statistics and salary
+player_statistics <- merge(player_statistics, player_salaries, by.x = "player_name", by.y = "player_name")
+```
+
+
+## Exploratory Analysis
+
+Now that we have our dataset ready, lets randomly discover different plots just to get the general ideas.
+
+### Analysis of distribution of age
+```{r}
+player_statistics %>%
+  ggplot(aes(x=Age))+
+  geom_bar(color="white", fill="blue")
+```
+
+### Analysis of salary of players based on points
+
+```{r}
+ggplot(player_statistics, 
+  aes(x = PTS, y = salary)) +
+  geom_point(alpha = .4, size = 3) +
+  xlab("Points Scored")+
+  ylab("Salary (In Millions)")+
+  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6))+ # millions
+  geom_smooth(method = "lm") 
+```
+
+ Now, lets just play with the data to view top players and their salaries and plot them.
+```{r}
+top_10_salary <- player_statistics %>% 
+  arrange(desc(salary)) %>% 
+  top_n(10)
+
+ggplot(data = top_10_salary)+
+  geom_bar(mapping = aes(x = player_name, y=salary), fill = "dodgerblue", stat = "identity")+
+  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6))+ # millions
+  theme(axis.text.x = element_text(angle = 30, vjust = 0.8))
+```
+
+
+The key objective is to find best player in each position but based on what parameter is unclear. So, lets use Performance Index Rating(PER) for each player to decide which player is best.
+
+Based on the wikipedia, PER refers to the substraction of sum of all positive measures and sum of all negative measures. So lets use the following formula based on what data we have in our dataframe:
+
+$PER = (Points + Rebounds + Assists + Steals + Blocks)- (Missed Field Goals + Missed Free Throws + Turnovers + Fouls Committed)$ (3)
+
+Now, lets create new column PER based on the formula
+```{r}
+player_statistics <- player_statistics %>% 
+  mutate(PER = (PTS+TRB+AST+STL+BLK)-(FGA+FTA+TOV+PF))
+```
+
+We can now consider PER as our predictive variable so lets compare PER with other response variables. 
+
+Also, we can consider this dataset as final and processed so lets save this dataset into respective processed folder.
+```{r}
+write.csv(player_statistics,'data/processed/player_statistics.csv')
+
+```
+
+## Distribution or PER
+```{r}
+ggplot(data = player_statistics, aes(x = PER)) +
+  geom_histogram(binwidth = 25, colour = "black", fill = "blue")
+# the distribution is right skewed
+
+```
+
+Also, lets check the relationship of PER with different variables we used in equations.
+# PTS vs PER
+```{r}
+ggplot(player_statistics, aes(x = PTS, y = PER)) +
+  geom_point(alpha = .4, size = 3) +
+  geom_smooth(method = "lm") 
+# moderate linear relation
+```
+
+### Salary vs PER
+```{r}
+ggplot(player_statistics, 
+  aes(x = PER, y = salary)) +
+  geom_point(alpha = .4, size = 3) +
+  xlab("Performance Indicator Tating (PER)")+
+  ylab("Salary (In Millions)")+
+  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6)) # millions
+
+```
+
+### Age vs Salary
+```{r}
+ggplot(player_statistics, 
+       aes(x = Age, y = salary)) +
+  geom_point(alpha = .4, size = 3) +
+  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6)) # millions
+
+# no clear relation
+```
+
+## Linear Regression
+
+Now lets use multiple linear regression to evaluate our basketball success matrix with the PER of the player.
+
+```{r}
+fit <- lm(PER ~ PTS+TRB+AST+STL+BLK, player_statistics)
+tidy(fit, conf.int = TRUE)
+```
+
+Lets check the multicollinearity by following code.
+```{r}
+car::vif(fit)
+
+pairs(formula = ~ PTS+TRB+AST+STL+BLK, data = player_statistics)
+
+# we can see that some values have almost same distance and patters indicating multicollinearlity
+
+```
+
+# Plot of regression
+```{r}
+car::avPlots(fit)
+```
+
+## Testing Heteroscedasticity
+```{r}
+res <- residuals(fit)
+fitted <- predict(fit)
+
+ggplot(data = NULL, aes(x = fitted, y = res)) +
+  geom_point(colour = "black") + 
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed")
+```
+
+The points are about same distance from line so there is homoscedasticity.
+Now, lets create exp_per variable to predict PER of players in future.
+
+```{r}
+new_df <- mutate(player_statistics, exp_per=predict(fit, newdata = player_statistics))
+
+# plot data
+ggplot(data = new_df, aes(x = PER, y = exp_per)) +
+  geom_point(colour = "black") + 
+  geom_abline(colour = "red", linetype = "dashed")
+```
+
+We can see the clear linear relationship among the calculated PER and predicted PER indicating our model as accurate enough. Thus, based on the PER we can choose our top players. To check top player in each position based on PER, we can use following section of code.
+
+## Player Recommendation
+
+Based on above linear models and the formula, the players recommended would be the one with highest PER. Following block of code presents the top player based on PER in each of the position in basketball.
+
+```{r}
+top_5_player <- player_statistics %>%
+  group_by(Pos) %>%
+  arrange(desc(PER)) %>%
+  select(Pos,player_name,Age,PER, salary) %>% 
+  filter(row_number()==1)
+
+print(top_5_player)
+```
+
+## Summary
+
+Overall, from the above project following conclusions can be made.
+
+1. The points scored seem to have no relation with salary at all.
+2. Generally, highest paid player should be the one with high PER, however as per our plot, salary and Performannce Index Rating (PER) have no corresponding linear relation i.e. sometimes even a player with low PER is getting paid highly.
+3. Distribution of age seems to be normally distributed.
+4. The distribution of PER values are right skewed.
+5. The points and PER seems to have moderate linear relationship.
+6. The age and salary doesn't seem to have any clear relation.
+7. The linear models for PER seems to be depending on all positive variables such as points, steals, blocks etc and the corresponding slopes are positive.
+8. The residuals are normally distributed and there is homoscedasticity in the distribution.
+9. If we plot the PER against exp_per which is expected PER value based on our linear relationship, there is strong positive linear relationship among them indicating our model to be accurate enough.
+
+
+## References
+
+1. NBA Salary Prediction using Multiple Regression [Internet]. Kaggle.com. 2022 [cited 6 May 2022]. Available from: https://www.kaggle.com/code/koki25ando/nba-salary-prediction-using-multiple-regression
+
+2. NBA Analytics Tutorial: Using R to Display Player Career Stats | R-bloggers [Internet]. R-bloggers. 2022 [cited 6 May 2022]. Available from: https://www.r-bloggers.com/2021/12/nba-analytics-tutorial-using-r-to-display-player-career-stats/
+
+3. Efficiency (basketball) - Wikipedia [Internet]. En.wikipedia.org. 2022 [cited 6 May 2022]. Available from: https://en.wikipedia.org/wiki/Efficiency_(basketball)
+
